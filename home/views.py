@@ -82,6 +82,7 @@ from .models import MentorRelationship
 from .models import NewCommunity
 from .models import NonCollegeSchoolTimeCommitment
 from .models import Notification
+from .models import OrganizerNotes
 from .models import Participation
 from .models import PaymentEligibility
 from .models import PriorFOSSExperience
@@ -178,6 +179,28 @@ class ActivationView(activation_views.ActivationView):
 
 class ActivationCompleteView(TemplateView):
     template_name = 'django_registration/activation_complete.html'
+
+class OrganizerNotesUpdate(LoginRequiredMixin, ComradeRequiredMixin, UpdateView):
+    model = OrganizerNotes
+    fields = ['status', 'notes',]
+
+    def get_object(self):
+        if not self.request.user.is_staff:
+            raise PermissionDenied("Only Outreachy organizers can edit notes.")
+
+        # If the comrade already has associated notes, fetch the notes object.
+        # Otherwise create a new OrganizerNotes object.
+        comrade = get_object_or_404(Comrade, pk=self.kwargs['comrade_pk'])
+        if not comrade.organizer_notes:
+            return OrganizerNotes(comrade=comrade)
+
+        return comrade.organizer_notes
+
+    def get_success_url(self):
+        comrade = get_object_or_404(Comrade, pk=self.kwargs['comrade_pk'])
+        comrade.organizer_notes = self.object
+        comrade.save()
+        return self.request.GET.get('next', reverse('dashboard'))
 
 # FIXME - we need a way for comrades to update and re-verify their email address.
 class ComradeUpdate(LoginRequiredMixin, UpdateView):
@@ -1291,6 +1314,31 @@ class GeneralFundingApplication(LoginRequiredMixin, UpdateView):
                 'community_slug': self.object.slug,
                 })
         return self.object.get_preview_url()
+
+class SponsorshipUpdate(LoginRequiredMixin, ComradeRequiredMixin, UpdateView):
+    model = Sponsorship
+    fields = [
+            'status',
+            'ticket_number',
+            'name',
+            'amount',
+            'funding_secured',
+            'funding_decision_date',
+            'coordinator_can_update',
+            'additional_information',
+            'organizer_notes',
+            ]
+
+    def get_object(self):
+        if not self.request.user.is_staff:
+            raise PermissionDenied("Only Outreachy organizers can edit notes.")
+
+        sponsorship = get_object_or_404(Sponsorship, pk=self.kwargs['pk'])
+
+        return sponsorship
+
+    def get_success_url(self):
+        return self.request.GET.get('next', reverse('dashboard'))
 
 class SponsorshipInlineFormSet(BaseInlineFormSet):
     def get_queryset(self):
@@ -3767,6 +3815,18 @@ def sponsor_info(request, round_slug):
     """
     current_round = get_object_or_404(RoundPage, slug=round_slug)
 
+    previous_rounds = RoundPage.objects.filter(internstarts__lt=current_round.internstarts).order_by('-internstarts')
+    if previous_rounds:
+        previous_round = previous_rounds[0]
+    else:
+        previous_round = None
+
+    next_rounds = RoundPage.objects.filter(internstarts__gt=current_round.internstarts).order_by('internstarts')
+    if next_rounds:
+        next_round = next_rounds[0]
+    else:
+        next_round = None
+
     # Before new communities are approved,
     # it's helpful to know who is requesting Outreachy general funding.
     # Therefore, include both approved and pending communities.
@@ -3792,6 +3852,8 @@ def sponsor_info(request, round_slug):
     return render(request, 'home/sponsor_info.html',
             {
             'current_round' : current_round,
+            'previous_round' : previous_round,
+            'next_round' : next_round,
             'community_sponsors' : community_sponsors,
             'sponsors_alpha' : sponsors_alpha,
             },
